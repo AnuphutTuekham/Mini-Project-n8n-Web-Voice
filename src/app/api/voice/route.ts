@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
-import products from "../../../data/products.json";
+import { getProductsFromDb } from "../../../lib/products-db";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
+    const products = getProductsFromDb();
+
     const body = (await req.json()) as { text?: string; transcript?: string };
     const incomingText = typeof body.text === "string" ? body.text : "";
     const incomingTranscript = typeof body.transcript === "string" ? body.transcript : "";

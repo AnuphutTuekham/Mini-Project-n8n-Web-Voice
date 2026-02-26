@@ -15,7 +15,6 @@ export default function Home() {
   const [result, setResult] = useState<ApiResult>({});
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState("");
-  const [volume, setVolume] = useState(1);
   const [micInputLevel, setMicInputLevel] = useState(0);
 
   const recognitionRef = useRef<any>(null);
@@ -148,20 +147,6 @@ export default function Home() {
     }
   }
 
-  function speakAnswer(answer?: string) {
-    if (!answer || !("speechSynthesis" in globalThis)) {
-      return;
-    }
-
-    globalThis.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(answer);
-    utterance.lang = "th-TH";
-    utterance.volume = volume;
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    globalThis.speechSynthesis.speak(utterance);
-  }
-
   useEffect(() => {
     // รองรับ Chrome: webkitSpeechRecognition
     const SpeechRecognition =
@@ -208,10 +193,6 @@ export default function Home() {
       const data: ApiResult = await resp.json();
       setResult({ ...data, transcript: data.transcript ?? transcript });
       setStatus(data.error ? "เกิดข้อผิดพลาด" : "เสร็จสิ้น");
-
-      if (data.answer && !data.error) {
-        speakAnswer(data.answer);
-      }
     };
 
     recognitionRef.current = rec;
@@ -329,22 +310,6 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-foreground/15 bg-background/90 p-5">
-            <h2 className="text-base font-semibold">เสียงตอบกลับ</h2>
-            <div className="mt-4 flex items-center justify-between text-sm">
-              <span className="font-medium">ระดับเสียงคำตอบ</span>
-              <span className="text-foreground/75">{Math.round(volume * 100)}%</span>
-            </div>
-            <input
-              className="mt-2 w-full accent-foreground"
-              type="range"
-              min={0.3}
-              max={1}
-              step={0.1}
-              value={volume}
-              onChange={(e) => setVolume(Number(e.target.value))}
-            />
-          </div>
         </section>
 
         <section className="mt-6 grid gap-4 md:grid-cols-2">
@@ -358,14 +323,6 @@ export default function Home() {
           <div className="rounded-2xl border border-foreground/15 bg-background/90 p-5">
             <h3 className="text-sm font-semibold text-foreground/90">คำตอบ</h3>
             <p className="mt-3 min-h-16 text-sm leading-6 text-foreground/90">{result.answer ?? "-"}</p>
-            {result.answer && !result.error && (
-              <button
-                className="mt-4 rounded-xl border border-foreground/15 bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-foreground/5"
-                onClick={() => speakAnswer(result.answer)}
-              >
-                ฟังคำตอบอีกครั้ง
-              </button>
-            )}
             {result.error && <p className="mt-3 text-sm text-foreground">{result.error}</p>}
           </div>
         </section>
