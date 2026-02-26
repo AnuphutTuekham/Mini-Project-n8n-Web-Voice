@@ -11,6 +11,7 @@ type ApiResult = {
 
 export default function Home() {
   const [isListening, setIsListening] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState("พร้อมพูด");
   const [result, setResult] = useState<ApiResult>({});
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
@@ -24,6 +25,7 @@ export default function Home() {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const frameRef = useRef<number | null>(null);
   const dataArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const processingRef = useRef(false);
 
   function stopMicMonitor() {
     if (frameRef.current !== null) {
@@ -169,7 +171,9 @@ export default function Home() {
 
     rec.onend = () => {
       setIsListening(false);
-      setStatus("หยุดฟังแล้ว");
+      if (!processingRef.current) {
+        setStatus("หยุดฟังแล้ว");
+      }
     };
 
     rec.onerror = (e: any) => {
@@ -180,19 +184,28 @@ export default function Home() {
 
     rec.onresult = async (event: any) => {
       const transcript = event.results?.[0]?.[0]?.transcript || "";
-      setStatus("ได้ข้อความแล้ว กำลังส่งไปถามระบบ...");
+      processingRef.current = true;
+      setIsProcessing(true);
+      setStatus("กำลังประมวลผล...");
       setResult({ transcript });
 
-      // ส่ง transcript ไป server (ไม่ส่งไฟล์เสียงแล้ว)
-      const resp = await fetch("/api/voice", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: transcript, transcript }),
-      });
+      try {
+        const resp = await fetch("/api/voice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: transcript, transcript }),
+        });
 
-      const data: ApiResult = await resp.json();
-      setResult({ ...data, transcript: data.transcript ?? transcript });
-      setStatus(data.error ? "เกิดข้อผิดพลาด" : "เสร็จสิ้น");
+        const data: ApiResult = await resp.json();
+        setResult({ ...data, transcript: data.transcript ?? transcript });
+        setStatus(data.error ? "เกิดข้อผิดพลาด" : "เสร็จสิ้น");
+      } catch {
+        setResult({ transcript, error: "network error" });
+        setStatus("เกิดข้อผิดพลาด");
+      } finally {
+        processingRef.current = false;
+        setIsProcessing(false);
+      }
     };
 
     recognitionRef.current = rec;
@@ -244,7 +257,7 @@ export default function Home() {
         <header className="rounded-2xl border border-foreground/15 bg-background/90 p-6 md:p-8">
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">IT Shop Voice Q&A</h1>
           <p className="mt-2 text-sm md:text-base text-foreground/80">
-            กดเริ่มแล้วพูด เช่น “มี SSD 1TB ไหม ราคาเท่าไหร่”
+            กดเริ่มแล้วพูด เช่น “จัดสเปคคอมงบ 40,000 บาท”
           </p>
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -264,7 +277,7 @@ export default function Home() {
               </button>
             )}
             <div className="rounded-xl border border-foreground/15 bg-background px-4 py-2.5 text-sm text-foreground/90">
-              {status}
+              {isProcessing ? "กำลังประมวลผล..." : status}
             </div>
           </div>
         </header>
@@ -322,7 +335,9 @@ export default function Home() {
 
           <div className="rounded-2xl border border-foreground/15 bg-background/90 p-5">
             <h3 className="text-sm font-semibold text-foreground/90">คำตอบ</h3>
-            <p className="mt-3 min-h-16 text-sm leading-6 text-foreground/90">{result.answer ?? "-"}</p>
+            <p className="mt-3 min-h-16 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/90">
+              {result.answer ?? "-"}
+            </p>
             {result.error && <p className="mt-3 text-sm text-foreground">{result.error}</p>}
           </div>
         </section>
