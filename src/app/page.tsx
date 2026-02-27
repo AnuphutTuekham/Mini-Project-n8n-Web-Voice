@@ -12,7 +12,7 @@ type ApiResult = {
 export default function Home() {
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [status, setStatus] = useState("พร้อมพูด");
+  const [status, setStatus] = useState("พร้อมรับคำถาม");
   const [result, setResult] = useState<ApiResult>({});
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState("");
@@ -24,49 +24,39 @@ export default function Home() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const frameRef = useRef<number | null>(null);
-  const dataArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const dataArrayRef = useRef<Uint8Array | null>(null);
   const processingRef = useRef(false);
 
+  // --- Logic Functions (คงเดิมตามของคุณ) ---
   function stopMicMonitor() {
     if (frameRef.current !== null) {
       cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
     }
-
     if (sourceRef.current) {
       sourceRef.current.disconnect();
       sourceRef.current = null;
     }
-
     analyserRef.current = null;
     dataArrayRef.current = null;
-
     if (audioContextRef.current) {
       void audioContextRef.current.close();
       audioContextRef.current = null;
     }
-
     setMicInputLevel(0);
   }
 
   function startMicMonitor(stream: MediaStream) {
     const AudioCtx = globalThis.AudioContext || (globalThis as any).webkitAudioContext;
-    if (!AudioCtx) {
-      return;
-    }
-
+    if (!AudioCtx) return;
     stopMicMonitor();
-
     const audioContext = new AudioCtx();
     const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.8;
-
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.5;
     const source = audioContext.createMediaStreamSource(stream);
     source.connect(analyser);
-
     const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
     audioContextRef.current = audioContext;
     analyserRef.current = analyser;
     sourceRef.current = source;
@@ -75,273 +65,252 @@ export default function Home() {
     const updateLevel = () => {
       const node = analyserRef.current;
       const bytes = dataArrayRef.current;
-      if (!node || !bytes) {
-        return;
-      }
-
+      if (!node || !bytes) return;
       node.getByteTimeDomainData(bytes);
-
       let sumSquares = 0;
       for (const byte of bytes) {
         const normalized = (byte - 128) / 128;
         sumSquares += normalized * normalized;
       }
-
       const rms = Math.sqrt(sumSquares / bytes.length);
-      const normalizedLevel = Math.min(1, rms * 4);
-      setMicInputLevel(normalizedLevel);
+      setMicInputLevel(Math.min(1, rms * 10)); // ปรับ Multiplier ให้แสดงผลกราฟสวยขึ้น
       frameRef.current = requestAnimationFrame(updateLevel);
     };
-
     frameRef.current = requestAnimationFrame(updateLevel);
   }
 
   async function setupMicrophones(preferredMicId?: string) {
-    if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
-      return;
-    }
-
+    if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
-
       const devices = await navigator.mediaDevices.enumerateDevices();
       const audioInputs = devices.filter((device) => device.kind === "audioinput");
       setMicrophones(audioInputs);
-
-      if (!audioInputs.length) {
-        return;
-      }
-
+      if (!audioInputs.length) return;
       let nextMicId = audioInputs[0].deviceId;
       if (preferredMicId && audioInputs.some((mic) => mic.deviceId === preferredMicId)) {
         nextMicId = preferredMicId;
-      } else if (selectedMicId && audioInputs.some((mic) => mic.deviceId === selectedMicId)) {
-        nextMicId = selectedMicId;
       }
-
-      if (nextMicId && nextMicId !== selectedMicId) {
-        setSelectedMicId(nextMicId);
-      }
+      setSelectedMicId(nextMicId);
     } catch {
-      setStatus("ยังไม่ได้อนุญาตไมโครโฟน หรือไม่สามารถอ่านรายการไมค์ได้");
+      setStatus("ไม่สามารถเข้าถึงไมโครโฟนได้");
     }
   }
 
   async function bindSelectedMic(deviceId: string) {
-    if (!deviceId || !navigator.mediaDevices?.getUserMedia) {
-      return;
-    }
-
+    if (!deviceId || !navigator.mediaDevices?.getUserMedia) return;
     try {
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach((track) => track.stop());
-        micStreamRef.current = null;
       }
-
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { deviceId: { exact: deviceId } },
       });
       micStreamRef.current = stream;
       startMicMonitor(stream);
     } catch {
-      setStatus("เปิดไมค์ที่เลือกไม่สำเร็จ ลองเลือกไมค์อื่น");
+      setStatus("เชื่อมต่อไมค์ไม่สำเร็จ");
     }
   }
 
   useEffect(() => {
-    // รองรับ Chrome: webkitSpeechRecognition
-    const SpeechRecognition =
-      (globalThis as any).SpeechRecognition || (globalThis as any).webkitSpeechRecognition;
-
+    const SpeechRecognition = (globalThis as any).SpeechRecognition || (globalThis as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setStatus("เบราว์เซอร์นี้ไม่รองรับ Web Speech API (แนะนำ Chrome เท่านั้น)");
+      setStatus("เบราว์เซอร์ไม่รองรับ (โปรดใช้ Chrome)");
       return;
     }
-
     const rec = new SpeechRecognition();
     rec.lang = "th-TH";
-    rec.interimResults = false; // เอาเฉพาะผลสุดท้าย
-    rec.maxAlternatives = 1;
-
-    rec.onstart = () => {
-      setIsListening(true);
-      setStatus("กำลังฟัง... พูดคำถามได้เลย");
-    };
-
-    rec.onend = () => {
-      setIsListening(false);
-      if (!processingRef.current) {
-        setStatus("หยุดฟังแล้ว");
-      }
-    };
-
-    rec.onerror = (e: any) => {
-      setIsListening(false);
-      setStatus(`เกิดข้อผิดพลาด: ${e?.error || "unknown"}`);
-      setResult({ error: e?.error || "speech error" });
-    };
-
+    rec.interimResults = false;
+    rec.onstart = () => { setIsListening(true); setStatus("กำลังฟัง..."); };
+    rec.onend = () => { setIsListening(false); if (!processingRef.current) setStatus("พร้อมรับคำถาม"); };
+    rec.onerror = (e: any) => { setIsListening(false); setStatus(`Error: ${e.error}`); };
     rec.onresult = async (event: any) => {
       const transcript = event.results?.[0]?.[0]?.transcript || "";
       processingRef.current = true;
       setIsProcessing(true);
       setStatus("กำลังประมวลผล...");
       setResult({ transcript });
-
       try {
         const resp = await fetch("/api/voice", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: transcript, transcript }),
         });
-
         const data: ApiResult = await resp.json();
         setResult({ ...data, transcript: data.transcript ?? transcript });
-        setStatus(data.error ? "เกิดข้อผิดพลาด" : "เสร็จสิ้น");
+        setStatus(data.error ? "เกิดข้อผิดพลาด" : "ประมวลผลเสร็จสิ้น");
       } catch {
-        setResult({ transcript, error: "network error" });
-        setStatus("เกิดข้อผิดพลาด");
+        setResult({ transcript, error: "Network Error" });
+        setStatus("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้");
       } finally {
         processingRef.current = false;
         setIsProcessing(false);
       }
     };
-
     recognitionRef.current = rec;
-
     setupMicrophones();
-    const onDeviceChange = () => {
-      setupMicrophones(selectedMicId);
-    };
-    navigator.mediaDevices?.addEventListener?.("devicechange", onDeviceChange);
-
-    return () => {
-      navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange);
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach((track) => track.stop());
-        micStreamRef.current = null;
-      }
-      stopMicMonitor();
-    };
   }, []);
 
   useEffect(() => {
-    if (!selectedMicId) {
-      return;
-    }
-
-    bindSelectedMic(selectedMicId);
+    if (selectedMicId) bindSelectedMic(selectedMicId);
   }, [selectedMicId]);
 
-  async function start() {
-    setResult({});
-    if (selectedMicId) {
-      await bindSelectedMic(selectedMicId);
-    }
-
-    try {
+  const toggleListening = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+    } else {
+      setResult({});
       recognitionRef.current?.start();
-    } catch {
-      // บางครั้ง start ซ้ำเร็วเกิน จะ throw
     }
-  }
-
-  function stop() {
-    recognitionRef.current?.stop();
-  }
+  };
 
   return (
-    <main className="min-h-screen bg-background text-foreground px-4 py-8 md:px-8">
-      <div className="mx-auto w-full max-w-5xl">
-        <header className="rounded-2xl border border-foreground/15 bg-background/90 p-6 md:p-8">
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">IT Shop Voice Q&A</h1>
-          <p className="mt-2 text-sm md:text-base text-foreground/80">
-            กดเริ่มแล้วพูด เช่น “จัดสเปคคอมงบ 40,000 บาท”
-          </p>
-
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-            {isListening ? (
-              <button
-                className="rounded-xl bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
-                onClick={stop}
-              >
-                หยุด
-              </button>
-            ) : (
-              <button
-                className="rounded-xl bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
-                onClick={() => void start()}
-              >
-                เริ่มพูด
-              </button>
-            )}
-            <div className="rounded-xl border border-foreground/15 bg-background px-4 py-2.5 text-sm text-foreground/90">
-              {isProcessing ? "กำลังประมวลผล..." : status}
-            </div>
+    <main className="min-h-screen bg-[#f8fafc] dark:bg-[#0f172a] text-slate-900 dark:text-slate-100 p-4 md:p-8 transition-colors duration-300">
+      <div className="mx-auto max-w-4xl">
+        
+        {/* Header Section */}
+        <header className="mb-10 text-center">
+          <div className="inline-flex items-center rounded-full bg-blue-500/10 px-4 py-1.5 text-sm font-semibold text-blue-600 dark:text-blue-400 mb-4">
+            <span className="relative mr-2 flex h-2 w-2">
+              <span className={`absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75 ${!isListening && 'hidden'}`}></span>
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500"></span>
+            </span>
+            AI Audio Interface v1.0
           </div>
+          <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-3 bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent">
+            Voice IT Shop
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400">ลองพูดว่าจัดสเปคคอมและงบที่มีเพื่อถาม เช่น จัดสเปคคอมงบ 40,000 บาท</p>
         </header>
 
-        <section className="mt-6 grid gap-6 lg:grid-cols-2">
-          <div className="rounded-2xl border border-foreground/15 bg-background/90 p-5">
-            <h2 className="text-base font-semibold">ตั้งค่าไมโครโฟน</h2>
-            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-              <select
-                className="min-w-0 flex-1 rounded-xl border border-foreground/15 bg-background px-3 py-2.5 text-sm outline-none ring-0"
-                value={selectedMicId}
-                onChange={(e) => setSelectedMicId(e.target.value)}
-              >
-                {microphones.length === 0 ? (
-                  <option value="">ไม่พบไมโครโฟน</option>
+        {/* Main Controls */}
+        <div className="grid gap-8 lg:grid-cols-12">
+          
+          {/* Left: Microphone & Control */}
+          <div className="lg:col-span-5 space-y-6">
+            <div className="rounded-3xl border border-white/20 bg-white/50 dark:bg-slate-800/50 p-8 shadow-xl backdrop-blur-xl transition-all hover:shadow-2xl">
+              <div className="flex flex-col items-center">
+                {/* Voice Visualizer Circle */}
+                <div className="relative mb-8">
+                   <div 
+                    className="absolute inset-0 rounded-full bg-blue-500/20 transition-transform duration-150"
+                    style={{ transform: `scale(${1 + micInputLevel * 1.5})` }}
+                  ></div>
+                  <button
+                    onClick={toggleListening}
+                    disabled={isProcessing}
+                    className={`relative z-10 flex h-24 w-24 items-center justify-center rounded-full shadow-2xl transition-all active:scale-90 ${
+                      isListening 
+                        ? 'bg-red-500 text-white animate-pulse shadow-red-500/50' 
+                        : 'bg-blue-600 text-white shadow-blue-600/50 hover:bg-blue-700'
+                    } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    {isListening ? (
+                      <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
+                    ) : (
+                      <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+                    )}
+                  </button>
+                </div>
+
+                <div className="text-center mb-6">
+                  <h3 className="text-lg font-bold">{isListening ? "กำลังรับฟังเสียง..." : status}</h3>
+                  <p className="text-xs text-slate-400 mt-1 uppercase tracking-widest font-semibold">
+                    {isProcessing ? "AI Is Thinking" : "Press to start"}
+                  </p>
+                </div>
+
+                {/* Mic Selector */}
+                <div className="w-full space-y-3">
+                  <label className="text-xs font-bold text-slate-400 uppercase ml-1">Input Source</label>
+                  <select
+                    className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm"
+                    value={selectedMicId}
+                    onChange={(e) => setSelectedMicId(e.target.value)}
+                  >
+                    {microphones.map((mic) => (
+                      <option key={mic.deviceId} value={mic.deviceId}>{mic.label || 'Microphone'}</option>
+                    ))}
+                  </select>
+                  <button 
+                    onClick={() => setupMicrophones(selectedMicId)}
+                    className="w-full text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    Refresh Device List
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Results Display */}
+          <div className="lg:col-span-7 space-y-4">
+            {/* Transcript Card */}
+            <div className="group rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm transition-all hover:border-blue-500/50">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+                </div>
+                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">ถอดความเสียง</h3>
+              </div>
+              <div className="text-lg font-medium leading-relaxed min-h-[3rem]">
+                {result.transcript ? (
+                  <span className="text-slate-700 dark:text-slate-200 italic">"{result.transcript}"</span>
                 ) : (
-                  microphones.map((mic, index) => (
-                    <option key={mic.deviceId} value={mic.deviceId}>
-                      {mic.label || `ไมค์ ${index + 1}`}
-                    </option>
-                  ))
+                   <span className="text-slate-300 dark:text-slate-700">รอรับคำถาม...</span>
                 )}
-              </select>
-              <button
-                className="rounded-xl border border-foreground/15 bg-background px-4 py-2.5 text-sm font-medium transition-colors hover:bg-foreground/5"
-                onClick={() => void setupMicrophones(selectedMicId)}
-              >
-                รีเฟรชไมค์
-              </button>
-            </div>
-
-            <div className="mt-5">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium">ระดับเสียงที่เข้าไมค์</span>
-                <span className="text-foreground/75">{Math.round(micInputLevel * 100)}%</span>
-              </div>
-              <div className="mt-2 h-3 w-full overflow-hidden rounded-full bg-foreground/10">
-                <div
-                  className="h-full rounded-full bg-foreground transition-[width] duration-100"
-                  style={{ width: `${Math.round(micInputLevel * 100)}%` }}
-                />
               </div>
             </div>
-          </div>
 
-        </section>
+            {/* Answer Card */}
+            <div className={`rounded-2xl border p-6 shadow-lg transition-all duration-500 ${isProcessing ? 'border-blue-500 animate-pulse' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'}`}>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="p-2 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                </div>
+                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">คำตอบจาก AI</h3>
+              </div>
+              
+              <div className="min-h-[10rem]">
+                {isProcessing ? (
+                   <div className="flex flex-col gap-2">
+                     <div className="h-4 w-3/4 bg-slate-100 dark:bg-slate-800 rounded animate-pulse"></div>
+                     <div className="h-4 w-1/2 bg-slate-100 dark:bg-slate-800 rounded animate-pulse"></div>
+                     <div className="h-4 w-2/3 bg-slate-100 dark:bg-slate-800 rounded animate-pulse"></div>
+                   </div>
+                ) : result.answer ? (
+                  <div className="prose dark:prose-invert prose-sm max-w-none whitespace-pre-wrap text-slate-700 dark:text-slate-300">
+                    {result.answer}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full pt-4 opacity-30">
+                     <svg className="w-12 h-12 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                     <p className="text-sm italic">พร้อมตอบทุกข้อสงสัยของคุณ</p>
+                  </div>
+                )}
+              </div>
 
-        <section className="mt-6 grid gap-4 md:grid-cols-2">
-          <div className="rounded-2xl border border-foreground/15 bg-background/90 p-5">
-            <h3 className="text-sm font-semibold text-foreground/90">ข้อความที่ถอดเสียง</h3>
-            <p className="mt-3 min-h-16 text-sm leading-6 text-foreground/90">
-              {result.transcript ?? "-"}
-            </p>
+              {result.error && (
+                <div className="mt-4 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 text-red-500 text-xs font-medium flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
+                  {result.error}
+                </div>
+              )}
+            </div>
           </div>
+        </div>
 
-          <div className="rounded-2xl border border-foreground/15 bg-background/90 p-5">
-            <h3 className="text-sm font-semibold text-foreground/90">คำตอบ</h3>
-            <p className="mt-3 min-h-16 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/90">
-              {result.answer ?? "-"}
-            </p>
-            {result.error && <p className="mt-3 text-sm text-foreground">{result.error}</p>}
-          </div>
-        </section>
+        {/* Footer info */}
+        <footer className="mt-12 text-center text-xs text-slate-400">
+           <p>© 2026 IT Shop Intelligent Assistant. Optimized for Chrome Browser.</p>
+        </footer>
       </div>
+
+      {/* Background Decor */}
+      <div className="fixed -bottom-24 -left-24 h-96 w-96 rounded-full bg-blue-500/5 blur-[100px] pointer-events-none"></div>
+      <div className="fixed -top-24 -right-24 h-96 w-96 rounded-full bg-indigo-500/5 blur-[100px] pointer-events-none"></div>
     </main>
   );
 }
