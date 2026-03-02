@@ -2,30 +2,6 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-function extractAnswer(rawText: string): string {
-  const trimmed = rawText.trim();
-  if (!trimmed) {
-    return "ไม่พบข้อความตอบกลับจาก n8n";
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as { answer?: string; text?: string; message?: string };
-    if (typeof parsed.answer === "string" && parsed.answer.trim()) {
-      return parsed.answer;
-    }
-    if (typeof parsed.text === "string" && parsed.text.trim()) {
-      return parsed.text;
-    }
-    if (typeof parsed.message === "string" && parsed.message.trim()) {
-      return parsed.message;
-    }
-  } catch {
-    return trimmed;
-  }
-
-  return trimmed;
-}
-
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as { text?: string; transcript?: string };
@@ -53,7 +29,49 @@ export async function POST(req: Request) {
     });
 
     const rawResponse = await resp.text();
-    const answer = extractAnswer(rawResponse);
+    let answer = "ไม่พบข้อความตอบกลับจาก n8n";
+
+    try {
+      const parsed = JSON.parse(rawResponse) as {
+        message?: string;
+        raw_data?: {
+          parts?: Array<{ category: string; name: string; price: number; spec: string; source_url?: string }>;
+          total?: number;
+          note?: string;
+        };
+      };
+
+      if (
+        parsed.raw_data &&
+        Array.isArray(parsed.raw_data.parts) &&
+        typeof parsed.raw_data.total === "number" &&
+        typeof parsed.raw_data.note === "string"
+      ) {
+        const lines = parsed.raw_data.parts.map(
+          (part) =>
+            `${part.category}\n` +
+            `ชื่อสินค้า: ${part.name}\n` +
+            `ราคา: ${part.price.toLocaleString()} บาท\n` +
+            `สเปค: ${part.spec}` +
+            (part.source_url ? `\nลิงค์อ้างอิง: ${part.source_url}` : "")
+        );
+
+        answer =
+          `รายงานการจัดสเปคคอมพิวเตอร์\n` +
+          `--------------------------------------\n\n` +
+          `${lines.join("\n\n")}\n\n` +
+          `--------------------------------------\n` +
+          `ราคารวมสุทธิ: ${parsed.raw_data.total.toLocaleString()} บาท\n\n` +
+          `หมายเหตุ: ${parsed.raw_data.note}`;
+      } else if (parsed.message && typeof parsed.message === "string") {
+        answer = parsed.message;
+      }
+    } catch {
+      // If parsing fails, just use the raw response
+      if (rawResponse.trim()) {
+        answer = rawResponse;
+      }
+    }
 
     return NextResponse.json(
       {

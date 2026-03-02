@@ -217,7 +217,6 @@ export default function Home() {
                     : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
                 }`}
               >
-                🎤 เสียง
               </button>
             </div>
           </div>
